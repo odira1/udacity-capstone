@@ -1,0 +1,44 @@
+{
+  "name": "udacity-capstone",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "git@github.com:odira1/udacity-capstone.git",
+  "author": "Emmanuel Uhegbu <uhegbuemmanuel@gmail.com>",
+  "license": "MIT",
+  "volta": {
+    "node": "16.15.1",
+    "yarn": "1.22.4"
+  },
+  "scripts": {
+    "build": "npx tsc",
+    "start": "node dist/index.js",
+    "dev": "concurrently \"npx tsc --watch\" \"nodemon -q dist/index.js\"",
+    "prepare": "husky install",
+    "test": "jest",
+    "lint": "eslint --config .eslintrc.json src/**"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@typescript-eslint/eslint-plugin": "^5.29.0",
+    "@typescript-eslint/parser": "^5.29.0",
+    "concurrently": "^7.2.2",
+    "eslint": "^8.18.0",
+    "eslint-config-airbnb-base": "^14.2.1",
+    "eslint-config-prettier": "^8.5.0",
+    "eslint-plugin-import": "^2.25.1",
+    "eslint-plugin-jest": "^26.5.3",
+    "husky": "^8.0.0",
+    "jest": "^28.1.1",
+    "lint-staged": "^13.0.3",
+    "nodemon": "^2.0.20",
+    "prettier": "2.7.1",
+    "ts-jest": "^28.0.5",
+    "ts-node": "^10.8.1",
+    "typescript": "^4.7.4"
+  },
+  "dependencies": {
+    "@types/express": "^4.17.13",
+    "@types/jest": "^28.1.3",
+    "express": "^4.18.1"
+  }
+}

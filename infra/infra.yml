@@ -1,0 +1,271 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Creates the required network infrastructure for Public and Private routing with Internet access
+Parameters:
+  VPCCIDR:
+    Type: String
+    Default: "10.0.0.0/16"
+  PrivSubnetCIDR:
+    Type: String
+    Default: "10.0.2.0/24"
+  PubSubnetCIDR:
+    Type: String
+    Default: "10.0.1.0/24"
+  ClusterName: 
+    Type: String
+    Default: udacity-capstone-cluster
+  NodeInstanceType:
+    Description: EC2 instance type for the node instances
+    Type: String
+    Default: t3.small
+    ConstraintDescription: Must be a valid EC2 instance type
+  NodeDiskSize:
+    Type: Number
+    Description: Node EBS volume size
+    Default: 20
+  SSHKeyName:
+    Type: String
+    Default: udacity_eks
+  NodeGroupScalingConfigMinSize:
+    Type: Number
+    Default: 2
+  NodeGroupScalingConfigDesiredSize:
+    Type: Number
+    Default: 2
+  NodeGroupScalingConfigMaxSize:
+    Type: Number
+    Default: 2
+Resources:
+  MainVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: "Main VPC"
+  InternetGW:
+    Type: AWS::EC2::InternetGateway
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MainVPC
+      InternetGatewayId: !Ref InternetGW
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      # Availability zone at your discretion or
+      # as a parameter
+      AvailabilityZone: "us-east-1a"
+      CidrBlock: !Ref PubSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: "Public Subnet AZ1"
+      VpcId: !Ref MainVPC
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: "us-east-1b"
+      CidrBlock: !Ref PrivSubnetCIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: "Private Subnet AZ1"
+      VpcId: !Ref MainVPC
+  NAT:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - EIP
+          - AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: "NAT to be used by servers in the private subnet"
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Tags:
+        - Key: Name
+          Value: "Elastic IP for our NAT Gateway"
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: "Private Route Table"
+      VpcId: !Ref MainVPC
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: "Public Route Table"
+      VpcId: !Ref MainVPC
+  AssociatePUBRT:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+  AssociatePRIVRT:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+  PublicInternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGW
+  PrivateInternetOutboundRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NAT
+  ControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Cluster communication with worker nodes
+      VpcId: !Ref MainVPC
+  ControlPlaneIngressFromWorkerNodesHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming HTTPS traffic (TCP/443) from worker nodes (for API server)
+      GroupId: !Ref ControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      ToPort: 443
+      FromPort: 443
+
+  ControlPlaneEgressToWorkerNodesKubelet:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow outgoing kubelet traffic (TCP/10250) to worker nodes
+      GroupId: !Ref ControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 10250
+      ToPort: 10250
+
+  ControlPlaneEgressToWorkerNodesHttps:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow outgoing HTTPS traffic (TCP/442) to worker nodes (for pods running extension API servers)
+      GroupId: !Ref ControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+  ControlPlane:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName 
+      RoleArn: !GetAtt ControlPlaneRole.Arn
+      ResourcesVpcConfig: 
+        SubnetIds:
+          - !Ref PublicSubnet1
+          - !Ref PrivateSubnet1
+        SecurityGroupIds:
+          - !Ref ControlPlaneSecurityGroup
+      Version: "1.24"
+  ControlPlaneRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: '2012-10-17'
+        Statement:
+            Effect: Allow
+            Principal:
+              Service: 
+                - eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy  
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn:
+      - ControlPlane
+    Properties:
+      ClusterName: !Ref ClusterName
+      CapacityType: ON_DEMAND
+      NodeRole: !GetAtt  NodeRole.Arn
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PrivateSubnet1
+      AmiType:  AL2_x86_64
+      InstanceTypes:
+        - !Ref NodeInstanceType
+      NodegroupName:  !Join [ "-", [ !Ref ClusterName, NodeGroup ] ]
+      DiskSize: !Ref NodeDiskSize
+      RemoteAccess:
+        Ec2SshKey: !Ref SSHKeyName
+      ScalingConfig:
+        MinSize: !Ref NodeGroupScalingConfigMinSize
+        DesiredSize: !Ref NodeGroupScalingConfigDesiredSize
+        MaxSize: !Ref NodeGroupScalingConfigMaxSize
+  NodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Effect: Allow
+          Principal:
+            Service:
+              - ec2.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+  WorkerNodesInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref NodeRole
+
+  WorkerNodesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for all the worker nodes
+      VpcId: !Ref MainVPC
+      Tags:
+        - Key: !Sub "kubernetes.io/cluster/${ControlPlane}"
+          Value: "owned"
+
+  WorkerNodesIngressFromWorkerNodes:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow all incoming traffic from other worker nodes
+      GroupId: !Ref WorkerNodesSecurityGroup
+      SourceSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: "-1"
+
+  WorkerNodesIngressFromControlPlaneKubelet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming kubelet traffic (TCP/10250) from control plane 
+      GroupId: !Ref WorkerNodesSecurityGroup
+      SourceSecurityGroupId: !Ref ControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 10250
+      ToPort: 10250
+
+  WorkerNodesIngressFromControlPlaneHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming HTTPS traffic (TCP/443) from control plane (for pods running extension API servers)
+      GroupId: !Ref WorkerNodesSecurityGroup
+      SourceSecurityGroupId: !Ref ControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+

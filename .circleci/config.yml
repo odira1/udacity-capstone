@@ -1,0 +1,90 @@
+version: 2.1
+
+orbs:
+  aws-eks: circleci/aws-eks@2.2.0
+  kubernetes: circleci/kubernetes@1.3.1
+
+jobs:
+  test:
+    docker:
+      - image: cimg/node:16.15.1
+    steps:
+      - checkout
+      - run: yarn
+      - run: yarn run test
+  lint:
+    docker:
+      - image: cimg/node:16.15.1
+    steps:
+      - checkout
+      - run: yarn
+      - run: yarn lint
+  
+  build-and-push-image:
+    docker:
+      - image: cimg/node:16.15.1
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 19.03.13
+      - run:
+          name: Build Docker Image
+          command: |
+            export TAG=v${CIRCLE_BUILD_NUM}
+            export IMAGE_NAME=udacity-capstone
+            docker build -t odira/$IMAGE_NAME:$TAG -t odira/$IMAGE_NAME:latest .
+            docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+            docker push odira/$IMAGE_NAME:$TAG
+            docker push odira/$IMAGE_NAME:latest
+
+  create_infrastructure:
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - checkout
+      - run:
+          name: "run cloudFormation template"
+          command: |
+            aws cloudformation deploy \
+              --template-file infra/infra.yml \
+              --stack-name udacity-capstone-stack \
+              --region=us-east-1 \
+              --capabilities CAPABILITY_NAMED_IAM
+          no_output_timeout: 30m
+
+  create-deployment:
+    docker:
+      - image: 'cimg/node:16.15.1'
+    parameters:
+      cluster-name:
+        description: |
+          Name of the EKS cluster
+        type: string
+        default: 'udacity-capstone-cluster'
+    steps:
+      - checkout
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: << parameters.cluster-name >>
+          install-kubectl: true
+      - kubernetes/create-or-update-resource:
+          get-rollout-status: true
+          resource-file-path: infra/deployment.yaml
+          resource-name: deployment/udacity-capstone
+          
+workflows:
+  build_test_analyze_deploy:
+    jobs:
+      - lint
+      - test:
+          requires:
+            - lint
+      - create_infrastructure
+      - build-and-push-image:
+          requires:
+            - create_infrastructure
+            - test
+      - create-deployment:
+          requires:
+            - build-and-push-image
+     
+      
